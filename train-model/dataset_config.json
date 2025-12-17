@@ -1,0 +1,11 @@
+{
+    "dataset_type": "audio_dir",
+    "datasets": [
+        {
+            "id": "renders",
+            "path": "/content/renders",
+            "custom_metadata_module": "/content/renders.py"
+        }
+    ],
+    "random_crop": false
+}
