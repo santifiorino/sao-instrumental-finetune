@@ -1,7 +1,7 @@
-import json
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import soundfile as sf
 import pyloudnorm as pyln
 from pedalboard.io import AudioFile
@@ -24,34 +24,34 @@ def main():
     for artist_dir in root.iterdir():
         if not artist_dir.is_dir():
             continue
-        for songs_metadata_path in artist_dir.glob("*.json"):
-            render_song(songs_metadata_path, artist_dir)
+        for midi_track_dir in artist_dir.iterdir():
+            if not midi_track_dir.is_dir():
+                continue
+            render_song(artist_dir, midi_track_dir)
 
 
-def render_song(metadata_path, artist_dir):
-    song_metadata = json.load(open(metadata_path, encoding="utf-8"))
-    output_path = output_dir / song_metadata["Artist"] / f"{song_metadata['Song']}.wav"
+def render_song(artist_dir, midi_track_dir):
+    output_path = output_dir / artist_dir.name / f"{midi_track_dir.name}.wav"
 
     if output_path.exists():
         return
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f'Rendering "{song_metadata["Song"]}" by {song_metadata["Artist"]}...')
+    print(f'Rendering "{midi_track_dir.name}" by {artist_dir.name}...')
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir = Path(temp_dir)
-        midi_dir = artist_dir / metadata_path.stem
 
-        synthesize_all_tracks(midi_dir, song_metadata, temp_dir)
+        synthesize_all_tracks(midi_track_dir, temp_dir)
         mix_and_normalize(temp_dir, output_path)
 
 
-def synthesize_all_tracks(midi_dir, song_metadata, temp_dir):
+def synthesize_all_tracks(midi_dir, temp_dir):
     for midi_path in midi_dir.iterdir():
-        synthesize_single_track(midi_path, song_metadata, temp_dir)
+        synthesize_single_track(midi_path, temp_dir)
 
 
-def synthesize_single_track(midi_path, song_metadata, temp_dir):
+def synthesize_single_track(midi_path, temp_dir):
     print(f"\tSynthesizing {midi_path.name}...")
 
     instrument_number = int(midi_path.stem.split("_")[0])
@@ -66,7 +66,7 @@ def synthesize_single_track(midi_path, song_metadata, temp_dir):
 
     audio = instrument(
         midi_messages,
-        duration=(song_metadata["duration_ms"] / 1000),
+        duration=get_midi_duration(midi_path),
         sample_rate=sample_rate,
         num_channels=num_channels,
     )
@@ -110,9 +110,14 @@ def ticks_to_seconds(ticks, tempo, ticks_per_beat):
     return ticks * tempo / 1e6 / ticks_per_beat
 
 
+def get_midi_duration(file):
+    midi_file = MidiFile(file)
+    return midi_file.length
+
+
 def normalize_loudness(file):
     data, rate = sf.read(file)
-    meter = pyln.Meter(rate)  # create BS.1770 meter
+    meter = pyln.Meter(rate)
     loudness = meter.integrated_loudness(data)
     loudness_normalized_audio = pyln.normalize.loudness(data, loudness, -12.0)
     sf.write(file, loudness_normalized_audio, rate)
@@ -123,7 +128,20 @@ def mix_audio_files(dir, output_path):
     audio_files = [sf.read(path.as_posix()) for path in audio_paths]
     wav_datas = [file[0] for file in audio_files]
     wav_rates = [file[1] for file in audio_files]
-    mixed_wav_data = sum(wav_datas)
+
+    # Pad all arrays to the same length
+    max_length = max(len(wav_data) for wav_data in wav_datas)
+
+    padded_wav_datas = []
+    for wav_data in wav_datas:
+        if len(wav_data) < max_length:
+            padding = max_length - len(wav_data)
+            padded_data = np.pad(wav_data, ((0, padding), (0, 0)), mode="constant")
+            padded_wav_datas.append(padded_data)
+        else:
+            padded_wav_datas.append(wav_data)
+
+    mixed_wav_data = sum(padded_wav_datas)
     mixed_wav_rate = wav_rates[0]
     sf.write(output_path.as_posix(), mixed_wav_data, mixed_wav_rate)
 
